@@ -1,0 +1,102 @@
+name: Reusable Sync & Release Logic
+
+on:
+  workflow_call:
+    inputs:
+      upstream_url:
+        description: 'Git URL of the upstream repository'
+        required: true
+        type: string
+      upstream_branch:
+        description: 'Branch to merge from'
+        required: false
+        default: 'main'
+        type: string
+      force_release:
+        description: 'Force release even if no changes'
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      token:
+        description: 'PAT to trigger downstream workflows'
+        required: true
+
+jobs:
+  sync-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.token }} # 使用 PAT 可以在 push 后触发其他 workflow
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge Upstream
+        run: |
+          echo "Syncing from ${{ inputs.upstream_url }}..."
+          git remote add upstream ${{ inputs.upstream_url }}
+          git fetch upstream ${{ inputs.upstream_branch }}
+          
+          # 合并上游代码。使用 --no-edit 接受默认合并信息
+          # 如果你的仓库有特殊修改，可能需要更复杂的合并策略
+          git merge upstream/${{ inputs.upstream_branch }} --no-edit
+          
+          git push origin main
+
+      - name: Check Changes & Generate Tag
+        id: check
+        run: |
+          # 1. 获取最近的一个 Tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          
+          # 2. 获取当前 Hash 和 上个 Tag 指向的 Hash
+          CURRENT_HASH=$(git rev-parse HEAD)
+          if [ -n "$LAST_TAG" ]; then
+            LAST_TAG_HASH=$(git rev-parse "$LAST_TAG^{}")
+          else
+            LAST_TAG_HASH=""
+          fi
+
+          echo "Last Tag: $LAST_TAG ($LAST_TAG_HASH)"
+          echo "Current:  $CURRENT_HASH"
+
+          # 3. 如果 Hash 一致且未强制发布，则退出
+          if [ "$CURRENT_HASH" == "$LAST_TAG_HASH" ] && [ "${{ inputs.force_release }}" != "true" ]; then
+            echo "::notice::No changes detected. Skipping release."
+            echo "release_needed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # 4. 生成符合 BCR 规范的 Pseudo-version: v0.0.0-YYYYMMDD-commitHash
+          # 这种版本号在 SemVer 中优先级很低，不会阻碍未来官方的正式版 v1.0.0
+          SHORT_HASH=$(git rev-parse --short=7 HEAD)
+          DATE_STR=$(date +'%Y%m%d')
+          NEW_TAG="v0.0.0-${DATE_STR}-${SHORT_HASH}"
+
+          # 防止重复 Tag (虽然有了 Hash 极少发生，但为了健壮性)
+          if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
+             echo "::warning::Tag $NEW_TAG already exists. Skipping."
+             echo "release_needed=false" >> $GITHUB_OUTPUT
+             exit 0
+          fi
+
+          echo "::notice::New release will be: $NEW_TAG"
+          echo "release_needed=true" >> $GITHUB_OUTPUT
+          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.release_needed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.token }}
+        run: |
+          TAG_NAME="${{ steps.check.outputs.new_tag }}"
+          gh release create "$TAG_NAME" \
+            --title "Auto Release $TAG_NAME" \
+            --notes "Sync with upstream ${{ inputs.upstream_url }} on $(date +'%Y-%m-%d'). Commit: $(git rev-parse HEAD)" \
+            --generate-notes
