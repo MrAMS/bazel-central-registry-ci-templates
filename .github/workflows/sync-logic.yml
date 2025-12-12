@@ -104,6 +104,7 @@ jobs:
           git push origin "$TAG_NAME"
           
           gh release create "$TAG_NAME" \
+            --repo ${{ github.repository }} \
             --title "Auto Release $TAG_NAME" \
             --notes "Sync with upstream ${{ inputs.upstream_url }} on $(date +'%Y-%m-%d'). Commit: $(git rev-parse HEAD)" \
             --generate-notes
