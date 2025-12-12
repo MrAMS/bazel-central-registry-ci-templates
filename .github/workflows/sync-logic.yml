@@ -95,6 +95,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.token }}
         run: |
+          # === 调试开始 ===
+          echo "Debug: Is Secret Empty? -> [${{ secrets.token == '' }}]"
+          gh auth status
+          # === 调试结束 ===
           TAG_NAME="${{ steps.check.outputs.new_tag }}"
           gh release create "$TAG_NAME" \
             --title "Auto Release $TAG_NAME" \
