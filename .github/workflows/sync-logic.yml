@@ -95,11 +95,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.token }}
         run: |
-          # === 调试开始 ===
-          echo "Debug: Is Secret Empty? -> [${{ secrets.token == '' }}]"
-          gh auth status
-          # === 调试结束 ===
           TAG_NAME="${{ steps.check.outputs.new_tag }}"
+          
+          echo "Manually pushing tag $TAG_NAME..."
+          
+          git tag "$TAG_NAME"
+          
+          git push origin "$TAG_NAME"
+          
           gh release create "$TAG_NAME" \
             --title "Auto Release $TAG_NAME" \
             --notes "Sync with upstream ${{ inputs.upstream_url }} on $(date +'%Y-%m-%d'). Commit: $(git rev-parse HEAD)" \
